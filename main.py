@@ -555,9 +555,11 @@ class StockAnalysisPipeline:
                     code, 
                     skip_analysis=dry_run,
                     single_stock_notify=single_stock_notify and send_notification
-                ): code
+                )
                 for code in stock_codes
             }
+            if not dry_run:
+             time.sleep(2.0)
             
             # 收集结果
             for future in as_completed(future_to_code):
@@ -825,11 +827,20 @@ def run_full_analysis(
             stock_codes=stock_codes,
             dry_run=args.dry_run,
             send_notification=not args.no_notify
-        )
+        ) 
+        # 关键修改：在此处增加一个全局冷却期
+        if not args.dry_run:
+         wait_time = 30.0  # 建议至少等待 30 秒
+         logger.info(f"个股分析已完成，为防止限流，强制等待 {wait_time} 秒后启动大盘复盘...")
+         time.sleep(wait_time)
         
         # 2. 运行大盘复盘（如果启用且不是仅个股模式）
         market_report = ""
         if config.market_review_enabled and not args.no_market_review:
+            # 在调用大盘复盘前强制休息 30 秒，确保配额重置
+            logger.info("等待 API 配额重置，准备执行大盘复盘...")
+            time.sleep(30)
+
             # 只调用一次，并获取结果
             review_result = run_market_review(
                 notifier=pipeline.notifier,
