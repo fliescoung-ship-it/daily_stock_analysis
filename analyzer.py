@@ -627,13 +627,12 @@ class GeminiAnalyzer:
         last_error = None
         tried_fallback = getattr(self, '_using_fallback', False)
         
-        for attempt in range(max_retries):
+        for attempt in range(max_retries + 1):
             try:
                 # 请求前增加延时（防止请求过快触发限流）
                 if attempt > 0:
                     delay = base_delay * (2 ** (attempt - 1))  # 指数退避: 5, 10, 20, 40...
-                    delay = min(delay, 60)  # 最大60秒
-                    logger.info(f"[Gemini] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
+                    logger.warning(f"[Gemini限流保护] 触发 429 或重试请求，等待 {delay} 秒后继续...")
                     time.sleep(delay)
                 
                 response = self._model.generate_content(
@@ -650,6 +649,9 @@ class GeminiAnalyzer:
             except Exception as e:
                 last_error = e
                 error_str = str(e)
+                if '429' not in error_str and 'quota' not in error_str.lower():
+                    logger.error(f"[Gemini报错] 非限流错误，停止重试: {error_str}")
+                    break
                 
                 # 检查是否是 429 限流错误
                 is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
@@ -717,7 +719,7 @@ class GeminiAnalyzer:
         # 请求前增加延时（防止连续请求触发限流）
         request_delay = config.gemini_request_delay
         if request_delay > 0:
-            logger.debug(f"[LLM] 请求前等待 {request_delay:.1f} 秒...")
+            logger.info(f"[防限流] 正在执行请求前置冷却: {request_delay} 秒...")
             time.sleep(request_delay)
         
         # 优先从上下文获取股票名称（由 main.py 传入）
