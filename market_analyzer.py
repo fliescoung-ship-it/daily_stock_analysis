@@ -326,14 +326,7 @@ class MarketAnalyzer:
     
     def generate_market_review(self, overview: MarketOverview, news: List) -> str:
         """
-        使用大模型生成大盘复盘报告
-        
-        Args:
-            overview: 市场概览数据
-            news: 市场新闻列表 (SearchResult 对象列表)
-            
-        Returns:
-            大盘复盘报告文本
+        使用大模型生成大盘复盘报告（已优化：增加防 429 限流逻辑）
         """
         if not self.analyzer or not self.analyzer.is_available():
             logger.warning("[大盘] AI分析器未配置或不可用，使用模板生成报告")
@@ -342,36 +335,53 @@ class MarketAnalyzer:
         # 构建 Prompt
         prompt = self._build_review_prompt(overview, news)
         
-        try:
-            logger.info("[大盘] 调用大模型生成复盘报告...")
-            
-            generation_config = {
-                'temperature': 0.7,
-                'max_output_tokens': 2048,
-            }
-            
-            # 根据 analyzer 使用的 API 类型调用
-            if self.analyzer._use_openai:
-                # 使用 OpenAI 兼容 API
-                review = self.analyzer._call_openai_api(prompt, generation_config)
-            else:
-                # 使用 Gemini API
-                response = self.analyzer._model.generate_content(
-                    prompt,
-                    generation_config=generation_config,
-                )
-                review = response.text.strip() if response and response.text else None
-            
-            if review:
-                logger.info(f"[大盘] 复盘报告生成成功，长度: {len(review)} 字符")
-                return review
-            else:
-                logger.warning("[大盘] 大模型返回为空")
-                return self._generate_template_review(overview, news)
+        # 从配置中读取流控参数
+        max_retries = self.config.gemini_max_retries
+        base_delay = self.config.gemini_retry_delay
+        request_delay = self.config.gemini_request_delay
+
+        for attempt in range(max_retries + 1):
+            try:
+                # 1. 强制请求前置等待（防止并发过快）
+                if request_delay > 0:
+                    time.sleep(request_delay)
+
+                logger.info(f"[大盘] 调用大模型生成复盘报告 (第 {attempt+1} 次尝试)...")
                 
-        except Exception as e:
-            logger.error(f"[大盘] 大模型生成复盘报告失败: {e}")
-            return self._generate_template_review(overview, news)
+                generation_config = {
+                    'temperature': 0.7,
+                    'max_output_tokens': 2048,
+                }
+                
+                # 2. 执行调用
+                if self.analyzer._use_openai:
+                    review = self.analyzer._call_openai_api(prompt, generation_config)
+                else:
+                    # 使用 Gemini API 并在报错时捕获 429
+                    response = self.analyzer._model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                    )
+                    review = response.text.strip() if response and response.text else None
+                
+                if review:
+                    logger.info(f"[大盘] 复盘报告生成成功，长度: {len(review)} 字符")
+                    return review
+                
+            except Exception as e:
+                error_msg = str(e)
+                # 3. 识别 429 错误并执行指数退避重试
+                if "429" in error_msg or "quota" in error_msg.lower():
+                    wait_time = base_delay * (2 ** attempt) # 指数增加等待时间
+                    logger.warning(f"[大盘] 触发限流(429)，{wait_time}秒后进行第 {attempt+2} 次重试...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"[大盘] 大模型生成复盘报告发生非限流错误: {e}")
+                    break # 其他错误不再重试
+                    
+        # 如果所有重试都失败，返回模板
+        logger.error("[大盘] 大模型生成复盘报告最终失败，切换至模板模式")
+        return self._generate_template_review(overview, news)
     
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
         """构建复盘报告 Prompt"""
