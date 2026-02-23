@@ -317,12 +317,21 @@ def test_notification():
     service = NotificationService()
     
     print_section("配置检查")
-    if service.is_available():
+    # 优先检查变量是否存在，再进行截断操作
+    if config.wechat_webhook_url:
         print(f"  ✓ 企业微信 Webhook 已配置")
-        webhook_preview = config.wechat_webhook_url[:50] + "..." if len(config.wechat_webhook_url) > 50 else config.wechat_webhook_url
+        # 此时确认为字符串，可以安全使用 len()
+        url = config.wechat_webhook_url
+        webhook_preview = url[:50] + "..." if len(url) > 50 else url
         print(f"    URL: {webhook_preview}")
+    elif service.is_available():
+        # 进入这里说明 Telegram 等其他渠道配了，但微信没配
+        print(f"  ℹ 通知系统已就绪，但未配置企业微信 (已启用其他渠道)")
+        # 如果你只想测试微信，可以在这里 return False；
+        # 如果想继续看其他测试，可以 return True
+        return True 
     else:
-        print(f"  ✗ 企业微信 Webhook 未配置")
+        print(f"  ✗ 未发现任何已配置的通知渠道 (微信/Telegram)")
         return False
     
     print_section("发送测试消息")
